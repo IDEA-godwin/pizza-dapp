@@ -1247,7 +1247,7 @@ const display = (element) => {
 
 // Unpkg imports
 const Web3Modal = window.Web3Modal.default;
-const WalletConnectProvider = window.WalletConnectProvider.default;
+// const WalletConnectProvider = window.WalletConnectProvider.default;
 const Fortmatic = window.Fortmatic;
 
 // Web3modal instance
@@ -1673,7 +1673,7 @@ const onLoadHandler = () => {
 		// Web3Modal
 
 		console.log("Initializing example");
-		console.log("WalletConnectProvider is", WalletConnectProvider);
+		// console.log("WalletConnectProvider is", WalletConnectProvider);
 		console.log("Fortmatic is", Fortmatic);
 		console.log(
 			"window.web3 is",
@@ -1698,12 +1698,14 @@ const onLoadHandler = () => {
 		// Built-in web browser provider (only one can exist as a time)
 		// like MetaMask, Brave or Opera is added automatically by Web3modal
 		const providerOptions = {
-			walletconnect: {
-				package: WalletConnectProvider,
-				options: {
-					infuraId: "19ccc986a817478881bf060e6104402f",
-				},
-			},
+
+			//wallet connect provider depreceated
+			// walletconnect: {
+			// 	package: WalletConnectProvider,
+			// 	options: {
+			// 		infuraId: "19ccc986a817478881bf060e6104402f",
+			// 	},
+			// },
 
 			fortmatic: {
 				package: Fortmatic,
