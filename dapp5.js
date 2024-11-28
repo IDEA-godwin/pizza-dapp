@@ -1,3 +1,18 @@
+
+import {
+	createAppKit,
+	WagmiAdapter,
+	Viem,
+	networks
+ } from 'https://cdn.jsdelivr.net/npm/@reown/appkit-cdn@1.3.0/dist/appkit.js'
+ import { 
+	reconnect, http, getAccount, 
+	readContracts, writeContract,
+	waitForTransactionReceipt,
+	watchContractEvent,
+	watchAccount
+} from 'https://esm.sh/@wagmi/core@2.x'
+
 const NETWORK = "";
 const BOX_ADDRESS = "0x4ae57798aef4af99ed03818f83d2d8aca89952c7";
 const PIZZA_ADDRESS = "0xe6616436ff001fe827e37c7fad100f531d0935f0";
@@ -1213,14 +1228,22 @@ const PIZZA_ABI = [
 	},
 ];
 
-let BoxInstance;
-let PizzaInstance;
-let maxNewPurchases = 6000;
-let priceInWei = 80000000000000000;
+const pizzaContract = {
+	address: PIZZA_ADDRESS,
+	abi: PIZZA_ABI
+} 
+
+const boxContract = {
+	address: BOX_ADDRESS,
+	abi: BOX_ABI
+} 
+
+let account;
+let maxNewPurchases = 6000n;
+let price = 0.08;
 let walletAddress = 0;
 let addresses = 0;
 let ethPrice = 2045; // fallback (only used on v1 where pizza estimate were shown)
-let metamaskInstalled = false;
 let saleStart = 0;
 let inActivePurchase = false;
 let wrongNetworkMessage = "Change to ETH mainnet to use this dapp 🍕";
@@ -1245,21 +1268,8 @@ const display = (element) => {
 	element.style.borderColor = "#ffcf55";
 };
 
-// Unpkg imports
-const Web3Modal = window.Web3Modal.default;
-// const WalletConnectProvider = window.WalletConnectProvider.default;
-const Fortmatic = window.Fortmatic;
-
 // Web3modal instance
-let web3Modal;
-
-// Chosen wallet provider given by the dialog window
-let provider;
-
-// Address of the selected account
-let selectedAccount;
-
-let web3;
+let appkitModal;
 
 const onLoadHandler = () => {
 	// Loading UI components
@@ -1283,500 +1293,306 @@ const onLoadHandler = () => {
 	boxContractLabel.innerHTML = `<a href='https://${NETWORK}etherscan.io/address/${BOX_ADDRESS}' target='_blank' class="link-83">${BOX_ADDRESS}</a>`;
 	pizzaContractLabel.innerHTML = `<a href='https://${NETWORK}etherscan.io/address/${PIZZA_ADDRESS}' target='_blank' class="link-83">${PIZZA_ADDRESS}</a>`;
 
-	const promptMetamask = async () => {
-		// Metamask only
-		// window.ethereum
-		// 	.enable()
-		// 	.then(async () => {
-		// 		walletButton.innerHTML = "<center>Connected</center>";
-		// 	})
-		// 	.catch((err) => {
-		// 		console.log(err);
-		// 	});
-
-		// Web3Modal
-		if (walletAddress == 0) {
-			console.log("Opening a dialog", web3Modal);
-			try {
-				provider = await web3Modal.connect();
-				provider.chainId != "0x1" ? alert(wrongNetworkMessage) : null;
-				walletButton.innerHTML = "<center>Disconnect</center>";
-				await startApp();
-			} catch (e) {
-				console.log("Wallet connection cancelled by user", e);
-				return;
-			}
-		} else {
-			console.log("Logging user out");
-
-			// If the cached provider is not cleared,
-			// WalletConnect will default to the existing session
-			// and does not allow to re-scan the QR code with a new wallet.
-			// Depending on your use case you may want or want not his behavir.
-			await web3Modal.clearCachedProvider();
-			console.log("clear cached");
-			provider = null;
-			walletAddress = 0;
-			walletButton.innerHTML = "Connect Wallet";
+	const buyButtonHandler = async () => {
+		console.log("Buy button pressed");
+		if (!appkitModal.getWalletProviderType()) {
+			appkitModal.open()
+			return
 		}
-	};
-
-	const triggerPurchase = () => {
+		
 		boxTxLabel.innerHTML = "Waiting for confirmation";
 		hide(buyButton);
 		//const gasPrice = 145;
 		const gasLimit = 256 * 1000;
 		let txHash = 0;
 		let numberToMint = selectMintQuantity.value;
-        web3.eth.getGasPrice().then((gasPrice)=>{
-            BoxInstance.methods
-			.multiPurchase(numberToMint)
-			.send({
-				from: walletAddress,
-				value: priceInWei * numberToMint,
-				gasPrice: web3.utils.toHex(gasPrice),
-				gasLimit: web3.utils.toHex(gasLimit),
+
+		try {
+			const { parseEther } = Viem
+			const config = appkitModal.adapter.wagmiConfig
+			const result = await writeContract(config, {
+				...boxContract,
+				functionName: 'multiPurchase',
+				args: [numberToMint],
+				value: parseEther("" + (price * numberToMint))
 			})
-			.on("transactionHash", (hash) => {
-				console.log("transactionHash: ", hash);
-
-				txHash = hash;
-				display(buyButton);
+			display(buyButton);
+			const reciept = await waitForTransactionReceipt(config, {
+				hash: result,
 			})
-			.on("receipt", async (receipt) => {
-				console.log("receipt: ", receipt);
-				boxTxLabel.innerHTML = `Transaction confirmed, enjoy your 🍕! <p>
-			              <a href='https://${NETWORK}etherscan.io/tx/${txHash}' target='_blank' class="link-81"> Transaction link </a> </p>`;
-				await updateValues();
-			})
-			.on("error", (err, receipt) => {
-				console.log("Transaction failed: ", err, "br/", receipt);
-
-				if (err.code === 4001) {
-					boxTxLabel.innerHTML = "Transaction rejected";
-				} else {
-					boxTxLabel.innerHTML = "Something went wrong, try again!";
-				}
-				display(buyButton);
-			});
-        })
-		
-	};
-
-	const updateValues = async () => {
-		// Checking total supplies
-		BoxInstance.methods
-			.totalSupply()
-			.call()
-			.then((amount) => {
-				console.log("BoxInstance.totalSupply: ", amount);
-				//boxesLabel.innerHTML = numberWithCommas(10000 - amount) // for prev versions
-			})
-			.catch((error) => {
-				console.log("box totalSupply failed: ", error);
-			});
-
-		BoxInstance.methods
-			.totalNewPurchases()
-			.call()
-			.then((amount) => {
-				boxesLabel.innerHTML = numberWithCommas(maxNewPurchases - amount);
-			})
-			.catch((error) => {
-				console.log("box totalNewPurchases failed: ", error);
-			});
-
-		PizzaInstance.methods
-			.totalSupply()
-			.call()
-			.then((amount) => {
-				console.log("PizzaInstance.totalSupply: ", amount);
-				pizzasLabel.innerHTML = numberWithCommas(amount);
-			})
-			.catch((error) => {
-				console.log("pizza totalSupply failed: ", error);
-			});
-
-		if (walletAddress != 0) {
-			// Check number of boxes
-			console.log("walletAddress: ", walletAddress);
-			BoxInstance.methods
-				.balanceOf(walletAddress)
-				.call()
-				.then(async (balance) => {
-					console.log(walletAddress, " owns ", balance, "boxes");
-
-					const boxes = [];
-					const promises = [];
-
-					for (let i = balance; i > 0; i--) {
-						promises.push(
-							BoxInstance.methods
-								.tokenOfOwnerByIndex(
-									walletAddress,
-									web3.utils.toBN(balance - i)
-								)
-								.call()
-								.then((boxId) => boxes.push(boxId))
-						);
-					}
-
-					await Promise.all(promises);
-
-					const results = await Promise.all(
-						boxes.map((boxId) =>
-							PizzaInstance.methods
-								.isRedeemed(boxId)
-								.call()
-								.then((value) => !value)
-						)
-					);
-
-					// clear out select box before we fill it again
-					while (selectBox.options.length > 1) {
-						// if it's the default select option, return
-						if (!selectBox.options[0].value) {
-							return;
-						}
-
-						selectBox.remove(0);
-					}
-
-					boxes
-						.filter((_v, index) => results[index])
-						.sort((a, b) => parseInt(a) - parseInt(b))
-						.forEach((boxId) => {
-							const boxOption = document.createElement("option");
-							boxOption.setAttribute("value", boxId);
-							boxOption.innerHTML = boxId;
-							selectBox.add(boxOption);
-						});
-				})
-				.catch((error) => {
-					console.log("box balanceOf failed: ", error);
-				});
-
-			PizzaInstance.methods
-				.balanceOf(walletAddress)
-				.call()
-				.then((balance) => {
-					console.log(walletAddress, " owns ", balance, "pizzas");
-				})
-				.catch((error) => {
-					console.log("pizza balanceOf failed: ", error);
-				});
-		}
-	};
-
-	const handleUser = async () => {
-		console.log("handling user");
-
-		await web3.eth
-			.getAccounts()
-			.then(async (accounts) => {
-				addresses = accounts;
-
-				if (!accounts.length) {
-					walletButton.innerHTML = "<center>Connect Wallet</center>";
-				} else {
-					walletButton.innerHTML = "<center>Disconnect</center>";
-					walletAddress = (await web3.eth.getAccounts())[0];
-					console.log("User wallet: ", walletAddress);
-				}
-			})
-			.catch((err) => {
-				console.log("Error fetching accounts: ", err);
-			});
-	};
-
-	const buyButtonHandler = () => {
-		console.log("Buy button pressed");
-		console.log("addresses.length: ", addresses.length);
-
-		if (!addresses.length) {
-			promptMetamask();
-		} else {
-			triggerPurchase();
-		}
-	};
-
-	const checkButtonHandler = () => {
-		console.log("Check button pressed");
-
-		if (!addresses.length) {
-			console.log("prompting metamask");
-			promptMetamask();
-		} else {
-			console.log("checking redeemed: ", boxIdField.value);
-			if (boxIdField.value < 0 || boxIdField.value > 9999) {
-				boxCheckLabel.innerHTML = "Box does not exist!";
+			boxTxLabel.innerHTML = `Transaction confirmed, enjoy your 🍕! <p>
+						  <a href='https://${NETWORK}etherscan.io/tx/${result}' target='_blank' class="link-81"> Transaction link </a> </p>`;
+			await updateValues_v2()
+		} catch (e) {
+			display(buyButton);
+			console.log(e.details)
+			console.log("Transaction failed: ", e);
+			if (e.code === 4001) {
+				boxTxLabel.innerHTML = "Transaction rejected";
 			} else {
-				PizzaInstance.methods
-					.isRedeemed(boxIdField.value)
-					.call()
-					.then((value) => {
-						console.log("isRedeemed: ", value);
-						if (value) {
-							boxCheckLabel.innerHTML = "Box was already opened!";
-						} else {
-							boxCheckLabel.innerHTML = "Box is still closed!";
-						}
-					})
-					.catch((error) => {
-						boxCheckLabel.innerHTML = "Error: " + error;
-						console.log("isRedeemed failed: ", error);
-					});
+				boxTxLabel.innerHTML = e.details ? e.details : "Something went wrong, try again!";
 			}
 		}
+
 	};
 
 	const bakePieHandler = async () => {
 		console.log("Bake pie button pressed");
-		if (selectBox.options.length > 1) {
-			await handleUser();
+		if (!appkitModal.getWalletProviderType()) {
+			appkitModal.open()
+			return
+		}
 
-			if (!addresses.length) {
-				console.log("prompting metamask");
-				promptMetamask();
-			} else if (selectBox.value) {
-				console.log("selectBox.value: ", selectBox.value);
-				pizzaTxLabel.innerHTML = "Waiting for confirmation";
-				console.log("Trying to bake");
-				console.log("parseFloat boxId", parseFloat(selectBox.value));
-				PizzaInstance.methods
-					.redeemRarePizzasBox(
-						parseFloat(selectBox.value),
-						parseFloat(selectRecipe.value)
-					)
-					.send({ from: walletAddress })
-					.on("transactionHash", (hash) => {
-						console.log("transactionHash: ", hash);
+		if(selectBox.options.length <= 1 || !selectBox.value) {
+			pizzaTxLabel.innerHTML = "Select the box you want to open";
+			pizzaTxLabel.style.color = 'red'
+			return
+		}
+		
+		console.log("selectBox.value: ", selectBox.value);
+		pizzaTxLabel.innerHTML = "Waiting for confirmation";
+		console.log("Trying to bake");
+		console.log("parseFloat boxId", parseFloat(selectBox.value));
 
-						txHash = hash;
-						display(buyButton);
-					})
-					.on("receipt", async (receipt) => {
-						console.log("receipt: ", receipt);
-
-						pizzaWarning.innerHTML = `Transaction confirmed, enjoy your 🍕! <p>
-			           <a href='https://${NETWORK}etherscan.io/tx/${txHash}' target='_blank'> Transaction link </a> </p>`;
-
-						await updateValues();
-					})
-					.on("error", (err, receipt) => {
-						console.log("Transaction failed: ", err, "br/", receipt);
-
-						if (err.code === 4001) {
-							pizzaTxLabel.innerHTML = "Transaction rejected";
-						} else {
-							pizzaTxLabel.innerHTML = "Something went wrong, try again!";
-						}
-						display(buyButton);
-					});
+		try {
+			const config = appkitModal.adapter.wagmiConfig
+			const result = await writeContract(config, {
+				...pizzaContract,
+				functionName: 'redeemRarePizzasBox',
+				args: [parseFloat(selectBox.value), parseFloat(selectRecipe.value)],
+			})
+			display(buyButton);
+			const reciept = await waitForTransactionReceipt(config, {
+				hash: result,
+			})
+			boxTxLabel.innerHTML = `Transaction confirmed, enjoy your 🍕! <p>
+						  <a href='https://${NETWORK}etherscan.io/tx/${result}' target='_blank' class="link-81"> Transaction link </a> </p>`;
+			boxTxLabel.style.color = 'green'
+			await updateValues_v2()
+		} catch (e) {
+			display(buyButton);
+			console.log(e.details)
+			console.log("Transaction failed: ", e);
+			if (e.code === 4001) {
+				boxTxLabel.innerHTML = "Transaction rejected";
 			} else {
-				pizzaTxLabel.innerHTML = "Select the box you want to open";
+				boxTxLabel.innerHTML = e.details ? e.details : "Something went wrong, try again!";
 			}
 		}
 	};
 
-	const walletButtonHandler = () => {
-		console.log("Wallet button pressed");
-		// Metamask only
-		// if (metamaskInstalled) {
-		// 	promptMetamask();
-		// } else {
-		// 	window.open("https://www.metamask.io");
-		// }
+	const checkButtonHandler = async () => {
+		console.log("Check button pressed");
+		if (!appkitModal.getWalletProviderType()) {
+			appkitModal.open()
+			return
+		}
 
-		// Web3Modal
-		promptMetamask();
+		if(!boxIdField.value) return;
+		
+		let value = Number.parseInt(boxIdField.value)
+		console.log("checking redeemed: ", value);
+		if (value < 0 || value > 9999) {
+			boxCheckLabel.innerHTML = "Box does not exist!";
+			boxCheckLabel.style.color = 'red';
+			return
+		} 
+
+		try {
+			const config = appkitModal.adapter.wagmiConfig
+			const [redeemed] = await readContracts(config, {
+				contracts: [
+					{
+						...pizzaContract,
+						functionName: 'isRedeemed',
+						args: [value],
+					}
+				]
+			})
+			console.log(redeemed)
+			if (redeemed.result) {
+				boxCheckLabel.innerHTML = "Box has been opened!";
+			} else {
+				boxCheckLabel.innerHTML = "Box is still closed!";
+			}
+		} catch (e) {
+			boxCheckLabel.innerHTML = "Error: " + e;
+			console.log("isRedeemed failed: ", e);
+		}
+
+		
 	};
 
-	const startApp = async () => {
-		console.log("APP STARTING");
-		// Web3Modal additions start
-		web3 = new Web3(provider);
+	const evaluateBoxes = async balance => {
+		const config = appkitModal.adapter.wagmiConfig
 
-		// Subscribe to accounts change
-		provider.on("accountsChanged", (accounts) => {
-			console.log("accounts: ", accounts);
-			updateValues();
-			handleUser();
-		});
+		if(balance < 1) return
 
-		// Subscribe to chainId change
-		provider.on("chainChanged", (chainId) => {
-			console.log("chainId changed: ", chainId);
-			updateValues();
-			handleUser();
-		});
+		let contracts = Array.from(Array(balance), (_, index) => ({
+			...boxContract,
+			functionName: 'tokenOfOwnerByIndex',
+			args: [account?.address, index]
+		}))
 
-		// Subscribe to networkId change
-		provider.on("networkChanged", (networkId) => {
-			console.log("networkId changed: ", networkId);
-			provider.chainId != "0x1" ? alert(wrongNetworkMessage) : null;
-			updateValues();
-			handleUser();
-		});
-		// Web3Modal additions end
+		let boxIds = await readContracts(config, { contracts })
 
-		BoxInstance = new web3.eth.Contract(BOX_ABI, BOX_ADDRESS);
-		PizzaInstance = new web3.eth.Contract(PIZZA_ABI, PIZZA_ADDRESS);
+		let contracts_pizza = await readContracts(config, {
+			contracts: boxIds.map(id => ({
+				...pizzaContract,
+				functionName: 'isRedeemed',
+				args: [id]
+			}))
+		})
 
-		BoxInstance.events
-			.Transfer((err, e) => {
-				console.log(e);
-			})
-			.on("data", async (e) => {
-				console.log("event: ", e);
-				await updateValues();
-			})
-			.on("changed", (i) => {
-				console.log("changed: ", i);
-			})
-			.on("error on Transfer", console.error);
+		// clear out select box before we fill it again
+		while (selectBox.options.length > 1) {
+			// if it's the default select option, return
+			if (!selectBox.options[0].value) {
+				return;
+			}
 
-		await handleUser();
-		await updateValues();
-	};
+			selectBox.remove(0);
+		}
 
-	const initWeb3 = () => {
-		// Metamask only
-		// if (window.ethereum) {
-		// 	console.log("Window.ethereum exists");
+		boxIds
+			.filter((_v, index) => contracts_pizza[index])
+			.sort((a, b) => parseInt(a) - parseInt(b))
+			.forEach((boxId) => {
+				const boxOption = document.createElement("option");
+				boxOption.setAttribute("value", boxId);
+				boxOption.innerHTML = boxId;
+				selectBox.add(boxOption);
+			});
+	}
 
-		// 	metamaskInstalled = true;
-		// 	window.web3 = new Web3(window.ethereum);
+	const updateValues_v2 = async () => {
+		const [pizzaBal, pizzaSupply, boxBal, boxSupply, boxPurchases] = await readContracts(appkitModal.adapter.wagmiConfig, {
+			contracts: [
+				{
+					...pizzaContract,
+					functionName: 'balanceOf',
+					args: [account?.address]
+				},
+				{
+					...pizzaContract,
+					functionName: 'totalSupply'
+				},
+				{
+					...boxContract,
+					functionName: 'balanceOf',
+					args: [account?.address]
+				},
+				{
+					...boxContract,
+					functionName: 'totalSupply'
+				},
+				{
+					...boxContract,
+					functionName: 'totalNewPurchases'
+				},
+			]
+		})
 
-		// 	startApp();
-		// } else if (window.web3) {
-		// 	console.log("Window.web3 exists");
+		console.log("Box total Supply: ", boxSupply.result);
+		//boxesLabel.innerHTML = numberWithCommas(10000 - amount) // for prev versions
+		console.log(account?.address, " owns ", pizzaBal.result, "pizzas");
+		pizzasLabel.innerHTML = numberWithCommas(pizzaSupply.result);
+		boxesLabel.innerHTML = numberWithCommas(maxNewPurchases - boxPurchases.result);
+		console.log(account?.address, " owns ", boxBal.result, "boxes");
+		evaluateBoxes(boxBal.result)
+	}
 
-		// 	metamaskInstalled = true;
-		// 	window.web3 = new Web3(window.web3.currentProvider);
+	const connected = async () => {
+		walletButton.innerHTML = "<center>Disconnect</center>"
+		console.log(appkitModal.adapter)
+		const config = appkitModal.adapter.wagmiConfig
+		account = getAccount(config)
+		await updateValues_v2()
 
-		// 	startApp();
-		// } else if (isMobile) {
-		// 	console.log("Mobile initiated");
+		const unwatch = watchContractEvent(config, {
+			BOX_ABI,
+			eventName: 'Transfer', 
+			onLogs(logs) {
+			  console.log('Logs changed!', logs)
+			  updateValues_v2().then()
+			},
+		 })
 
-		// 	metamaskInstalled = true;
-		// 	startApp();
-		// } else {
-		// 	console.log("Non-ethereum browser detected");
+		const unWatchAcct = watchAccount(config,  {
+			async onChange(_prev, _curr) {
+				account = getAccount(config)
+				await updateValues_v2()
+			} 
+		})
+		
+	}
 
-		// 	window.alert("Browser not compatible. Try Chrome and MetaMask!");
-
-		// 	alert("Try Chrome and MetaMask!");
-		// 	metamaskInstalled = false;
-		// }
-
-		// Web3Modal
+	const initWeb3 = async () => {
 
 		console.log("Initializing example");
-		// console.log("WalletConnectProvider is", WalletConnectProvider);
-		console.log("Fortmatic is", Fortmatic);
-		console.log(
-			"window.web3 is",
-			window.web3,
-			"window.ethereum is",
-			window.ethereum
-		);
+		// console.log(
+		// 	"window is", window,
+		// 	"window.web3 is", window.web3,
+		// 	"window.ethereum is", window.ethereum,
+		// );
 
-		// Check that the web page is run in a secure context,
-		// as otherwise MetaMask won't be available
-		// if (location.protocol !== "https:") {
-		// 	// https://ethereum.stackexchange.com/a/62217/620
-		// 	window.alert("Use https!");
-		// 	// TO-DO: Disable connect/buy button
-		// 	// const alert = document.querySelector("#alert-error-https");
-		// 	// alert.style.display = "block";
-		// 	// document.querySelector("#btn-connect").setAttribute("disabled", "disabled")
-		// 	return;
-		// }
+		const projectId = "5c273bafcd34bc0b510415376e6b1a36"
+		const networkList = [ networks.mainnet ]
 
-		// Tell Web3modal what providers we have available.
-		// Built-in web browser provider (only one can exist as a time)
-		// like MetaMask, Brave or Opera is added automatically by Web3modal
-		const providerOptions = {
-
-			//wallet connect provider depreceated
-			// walletconnect: {
-			// 	package: WalletConnectProvider,
-			// 	options: {
-			// 		infuraId: "19ccc986a817478881bf060e6104402f",
-			// 	},
-			// },
-
-			fortmatic: {
-				package: Fortmatic,
-				options: {
-					key: "pk_live_38D9CE8398A2E562",
+		try {
+			const { createClient } = Viem
+			const wagmiAdapter = new WagmiAdapter({
+				projectId,
+				networks: networkList,
+				client({ chain }) {
+					return createClient({ chain, transport: http() })
 				},
-			},
+			})
 
-			portis: {
-				package: Portis, // required
-				options: {
-					id: "2e2f473c-69d4-4c15-bc0b-63b81124630c", // required
+			appkitModal = createAppKit({
+				adapters: [wagmiAdapter],
+				networks: networkList,
+				projectId,
+				metadata: {
+				  name: 'PizzaDao Dapp',
+				  description: 'Pizza dao implementation of walletconnect',
+				  url: 'https://pizzadao.xyz',
+				  icons: ['https://avatars.githubusercontent.com/u/179229932?s=200&v=4']
 				},
-			},
-
-			authereum: {
-				package: Authereum, // required
-			},
-
-			torus: {
-				package: Torus, // required
-				// options: {
-				//   networkParams: {
-				//     host: "https://localhost:8545", // optional
-				//     chainId: 1337, // optional
-				//     networkId: 1337 // optional
-				//   },
-				//   config: {
-				//     buildEnv: "development" // optional
-				//   }
-				//}
-			},
-
-			// mewconnect: {
-			//   package: MewConnect, // required
-			//   options: {
-			//     infuraId: "8043bb2cf99347b1bfadfb233c5325c0" // required
-			//   }
-			// },
-			//
-			// frame: {
-			//   package: ethProvider // required
-			// }
-		};
-
-		web3Modal = new Web3Modal({
-			cacheProvider: true, // optional
-			providerOptions, // required
-			disableInjectedProvider: false, // optional. For MetaMask / Brave / Opera.
-		});
-
-		console.log("Web3Modal instance is", web3Modal);
+				features: {
+					email: false,
+					socials: [],
+				 }
+			})
+			await reconnect(wagmiAdapter.wagmiConfig)
+			if (appkitModal.getWalletProviderType()) {
+				await connected()
+			}
+		} catch (e) {
+			console.error('Error creating or using modal:', e)
+		}
 	};
 
 	initWeb3();
 
-	walletButton.addEventListener("click", walletButtonHandler);
+	appkitModal?.subscribeEvents(async e => {
+		const { event } = e.data
+		if (event === 'CONNECT_SUCCESS') await connected()
+	})
+
+	walletButton.addEventListener("click", () => {
+		console.log("Wallet button pressed");
+		if (walletButton.innerHTML.includes('Dis')) {
+			appkitModal.adapter?.connectionControllerClient?.disconnect()
+				.then(() => {
+					walletButton.innerHTML = "<center>Connect Wallet</center>";
+				})
+		} else appkitModal.open()
+	});
+
 	buyButton.addEventListener("click", buyButtonHandler);
 	checkButton.addEventListener("click", checkButtonHandler);
 	bakePie.addEventListener("click", bakePieHandler);
-
-	// Metamask only
-	// // detect account change
-	// window.ethereum.on("accountsChanged", function (accounts) {
-	// 	console.log("accountsChanges", accounts);
-	// });
-
-	// // detect network change
-	// window.ethereum.on("chainChanged", function (chainId) {
-	// 	console.log("chainChanged", chainId);
-	// });
 };
 
 window.addEventListener("load", onLoadHandler, { once: true });
