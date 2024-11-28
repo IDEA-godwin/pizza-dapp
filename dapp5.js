@@ -9,6 +9,7 @@ import {
 	reconnect, http, getAccount, 
 	readContracts, writeContract,
 	waitForTransactionReceipt,
+	estimateFeesPerGas,
 	watchContractEvent,
 	watchAccount
 } from 'https://esm.sh/@wagmi/core@2.x'
@@ -1304,17 +1305,23 @@ const onLoadHandler = () => {
 		hide(buyButton);
 		//const gasPrice = 145;
 		const gasLimit = 256 * 1000;
-		let txHash = 0;
 		let numberToMint = selectMintQuantity.value;
 
 		try {
 			const { parseEther } = Viem
 			const config = appkitModal.adapter.wagmiConfig
+
+			const {maxPriorityFeePerGas, maxFeePerGas} = await estimateFeesPerGas(config)
+
 			const result = await writeContract(config, {
 				...boxContract,
 				functionName: 'multiPurchase',
 				args: [numberToMint],
-				value: parseEther("" + (price * numberToMint))
+				value: parseEther("" + (price * numberToMint)),
+				gas: gasLimit,
+				maxPriorityFeePerGas,
+				maxFeePerGas
+				
 			})
 			display(buyButton);
 			const reciept = await waitForTransactionReceipt(config, {
