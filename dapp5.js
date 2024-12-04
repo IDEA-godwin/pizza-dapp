@@ -1240,6 +1240,7 @@ const boxContract = {
 } 
 
 let account;
+let isConnected;
 let maxNewPurchases = 6000n;
 let price = 0.08;
 let walletAddress = 0;
@@ -1430,16 +1431,17 @@ const onLoadHandler = () => {
 		
 	};
 
-	const evaluateBoxes = async balance => {
+	const evaluateBoxes = async bal => {
 		const config = appkitModal.adapter.wagmiConfig
 
-		if(balance < 1) return
-
-		let contracts = Array.from(Array(balance), (_, index) => ({
-			...boxContract,
-			functionName: 'tokenOfOwnerByIndex',
-			args: [account?.address, index]
-		}))
+		if(bal < 1) return
+		const balance = Number.parseInt(bal)
+		let contracts = Array.from({ length: balance }, (_, i) => i)
+			.map(i => ({
+				...boxContract,
+				functionName: 'tokenOfOwnerByIndex',
+				args: [account?.address, i]
+			}))
 
 		let boxIds = await readContracts(config, { contracts })
 
@@ -1447,7 +1449,7 @@ const onLoadHandler = () => {
 			contracts: boxIds.map(id => ({
 				...pizzaContract,
 				functionName: 'isRedeemed',
-				args: [id]
+				args: [id.result]
 			}))
 		})
 
@@ -1462,12 +1464,12 @@ const onLoadHandler = () => {
 		}
 
 		boxIds
-			.filter((_v, index) => contracts_pizza[index])
-			.sort((a, b) => parseInt(a) - parseInt(b))
+			.filter((_v, index) => !contracts_pizza[index].result)
+			.sort((a, b) => parseInt(a.result) - parseInt(b.result))
 			.forEach((boxId) => {
 				const boxOption = document.createElement("option");
-				boxOption.setAttribute("value", boxId);
-				boxOption.innerHTML = boxId;
+				boxOption.setAttribute("value", boxId.result);
+				boxOption.innerHTML = boxId.result;
 				selectBox.add(boxOption);
 			});
 	}
@@ -1511,10 +1513,12 @@ const onLoadHandler = () => {
 
 	const connected = async () => {
 		walletButton.innerHTML = "<center>Disconnect</center>"
+		isConnected = true;
 		console.log(appkitModal.adapter)
 		const config = appkitModal.adapter.wagmiConfig
 		account = getAccount(config)
-		await updateValues_v2()
+
+		if (account) await updateValues_v2()
 
 		const unwatch = watchContractEvent(config, {
 			BOX_ABI,
@@ -1524,14 +1528,6 @@ const onLoadHandler = () => {
 			  updateValues_v2().then()
 			},
 		 })
-
-		const unWatchAcct = watchAccount(config,  {
-			async onChange(_prev, _curr) {
-				account = getAccount(config)
-				await updateValues_v2()
-			} 
-		})
-		
 	}
 
 	const initWeb3 = async () => {
@@ -1582,10 +1578,18 @@ const onLoadHandler = () => {
 
 	initWeb3();
 
-	appkitModal?.subscribeEvents(async e => {
-		const { event } = e.data
-		if (event === 'CONNECT_SUCCESS') await connected()
-	})
+	const unwatch = watchAccount(appkitModal.adapter.wagmiConfig, {
+		onChange(data) {
+			if (data.isConnected && !isConnected) {
+				connected()
+				return
+			}
+			if (account && account?.address && account.address !== data.address){
+				account = getAccount(appkitModal.adapter.wagmiConfig)
+				updateValues_v2().then()
+			}
+		},
+	 })
 
 	walletButton.addEventListener("click", () => {
 		console.log("Wallet button pressed");
@@ -1593,6 +1597,7 @@ const onLoadHandler = () => {
 			appkitModal.adapter?.connectionControllerClient?.disconnect()
 				.then(() => {
 					walletButton.innerHTML = "<center>Connect Wallet</center>";
+					isConnected = false
 				})
 		} else appkitModal.open()
 	});
